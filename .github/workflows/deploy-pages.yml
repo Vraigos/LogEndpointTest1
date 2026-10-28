@@ -32,8 +32,8 @@ jobs:
 
       - name: Build
         run: npm run build
-        # DATABASE_URL is intentionally unset so migrate.mjs skips (see scripts/migrate.mjs).
-        # Any VITE_* secrets can be passed here if needed:
+        # DATABASE_URL is intentionally unset so migrate.mjs skips.
+        # Pass any VITE_* secrets here if needed for the client build:
         # env:
         #   VITE_EXAMPLE: ${{ secrets.VITE_EXAMPLE }}
 
@@ -43,8 +43,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Nitro (vercel preset) puts static assets under .output/public.
-          path: .output/public
+          # Nitro vercel preset outputs static files here
+          path: .vercel/output/static
 
   deploy:
     environment:
