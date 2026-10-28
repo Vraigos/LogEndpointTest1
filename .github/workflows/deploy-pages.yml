@@ -4,8 +4,6 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
-  # Refresh the static log view when issus.json changes
-  # (same workflow already runs on any push to main)
 
 permissions:
   contents: read
@@ -25,31 +23,18 @@ jobs:
 
       - name: Build static Issue Drop site
         run: |
+
           set -euo pipefail
           mkdir -p site
-
-          # Copy public assets if present
-          if [ -d public ]; then
-            cp -a public/. site/ 2>/dev/null || true
-          fi
-          # Prefer favicon from public
-          if [ -f public/favicon.svg ]; then
-            cp public/favicon.svg site/favicon.svg
-          fi
-
-          # Snapshot of the log for first paint (also fetched live in the browser)
-          if [ -f issus.json ]; then
-            cp issus.json site/issus.json
-          else
-            echo '{"messages":[]}' > site/issus.json
-          fi
+          if [ -d public ]; then cp -a public/. site/ 2>/dev/null || true; fi
+          if [ -f public/favicon.svg ]; then cp public/favicon.svg site/favicon.svg; fi
+          if [ -f issus.json ]; then cp issus.json site/issus.json; else echo '{"messages":[]}' > site/issus.json; fi
 
           python3 << 'ENDPY'
-          import json, pathlib, html
+          import json, pathlib, html, textwrap
           root = pathlib.Path("site")
-          log_path = root / "issus.json"
           try:
-              data = json.loads(log_path.read_text(encoding="utf-8"))
+              data = json.loads((root / "issus.json").read_text(encoding="utf-8"))
           except Exception:
               data = {"messages": []}
           messages = data.get("messages") if isinstance(data, dict) else []
@@ -59,460 +44,221 @@ jobs:
           def esc(s):
               return html.escape(str(s), quote=True)
 
-          items_html = []
-          for i, m in enumerate(messages):
-              if isinstance(m, str):
-                  text, at = m, None
-              elif isinstance(m, dict) and isinstance(m.get("text"), str):
-                  text, at = m["text"], m.get("at")
-              else:
-                  continue
+          cleaned_msgs = []
+          for m in messages:
+              if isinstance(m, str) and m.strip():
+                  cleaned_msgs.append({"text": m, "at": None})
+              elif isinstance(m, dict) and isinstance(m.get("text"), str) and m["text"].strip():
+                  cleaned_msgs.append({"text": m["text"], "at": m.get("at") if isinstance(m.get("at"), str) else None})
+
+          items = []
+          for i, m in enumerate(cleaned_msgs):
               n = i + 1
-              when = esc(at) if at else ""
-              items_html.append(
-                  f'<li class="row" data-n="{n}">'
-                  f'<span class="num">#{n:03d}</span>'
-                  f'<div class="body"><p class="msg">{esc(text)}</p>'
-                  + (f'<p class="when">{when}</p>' if when else "")
-                  + "</div></li>"
+              when = esc(m["at"]) if m["at"] else ""
+              items.append(
+                  '<li class="row"><span class="num">#%03d</span><div class="body"><p class="msg">%s</p>%s</div></li>'
+                  % (n, esc(m["text"]), ('<p class="when">' + when + "</p>") if when else "")
               )
-          # newest first in UI
-          items_html = list(reversed(items_html))
-          list_block = "\n".join(items_html) if items_html else (
-              '<p class="empty">Nothing sealed yet. The first line stays until someone edits the file on GitHub.</p>'
-          )
-          count = len([1 for m in messages if (isinstance(m, str) and m.strip()) or (isinstance(m, dict) and isinstance(m.get("text"), str) and m["text"].strip())])
+          items = list(reversed(items))
+          count = len(cleaned_msgs)
+          list_block = "\n".join(items) if items else ""
+          empty_block = "" if items else '<p class="empty">Nothing sealed yet. The first line stays until someone edits the file on GitHub.</p>'
 
-          page = f"""<!DOCTYPE html>
-          <html lang="en">
-          <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <meta name="theme-color" content="#141210" />
-            <title>Issue Drop</title>
-            <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-            <link rel="preconnect" href="https://fonts.googleapis.com" />
-            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-            <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,520;9..144,640&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" />
-            <style>
-              :root {{
-                --bg: #141210;
-                --surface: #221e19;
-                --fg: #f4efe6;
-                --muted: #a39888;
-                --accent: #e2a15a;
-                --hair: 0 0 0 1px rgba(244, 239, 230, 0.08);
-                --lift: 0 0 0 1px rgba(226, 161, 90, 0.55);
-                --font-display: "Fraunces", Georgia, serif;
-                --font-sans: "Outfit", system-ui, sans-serif;
-              }}
-              * {{ box-sizing: border-box; }}
-              html {{ color-scheme: dark; -webkit-font-smoothing: antialiased; }}
-              body {{
-                margin: 0;
-                min-height: 100dvh;
-                background: var(--bg);
-                color: var(--fg);
-                font-family: var(--font-sans);
-                line-height: 1.5;
-              }}
-              h1, h2 {{
-                font-family: var(--font-display);
-                font-weight: 560;
-                text-wrap: balance;
-                margin: 0;
-              }}
-              p {{ margin: 0; text-wrap: pretty; }}
-              a {{ color: var(--fg); }}
-              button:not(:disabled) {{ cursor: pointer; }}
-              ::selection {{ background: var(--accent); color: var(--bg); }}
-              .wrap {{
-                margin: 0 auto;
-                max-width: 32rem;
-                padding: 2rem 1.25rem 4rem;
-              }}
-              @media (min-width: 640px) {{
-                .wrap {{ padding-top: 3.5rem; }}
-              }}
-              .eyebrow {{
-                font-size: 0.75rem;
-                font-weight: 500;
-                letter-spacing: 0.12em;
-                text-transform: uppercase;
-                color: var(--accent);
-              }}
-              h1 {{
-                margin-top: 0.75rem;
-                font-size: 2.5rem;
-                line-height: 1;
-              }}
-              @media (min-width: 640px) {{
-                h1 {{ font-size: 3rem; }}
-              }}
-              .lead {{
-                margin-top: 1rem;
-                font-size: 1rem;
-                color: var(--muted);
-              }}
-              .lock {{
-                margin-top: 0.75rem;
-                display: inline-flex;
-                align-items: center;
-                gap: 0.5rem;
-                font-size: 0.875rem;
-                color: var(--muted);
-              }}
-              .card {{
-                margin-top: 2rem;
-                border-radius: 1.5rem;
-                background: var(--surface);
-                box-shadow: var(--hair);
-                padding: 0.5rem;
-              }}
-              label {{
-                display: block;
-                padding: 0.75rem 0.75rem 0;
-                font-size: 0.875rem;
-                font-weight: 500;
-                color: var(--muted);
-              }}
-              textarea {{
-                margin-top: 0.5rem;
-                width: 100%;
-                min-height: 8rem;
-                resize: vertical;
-                border: 0;
-                border-radius: 1rem;
-                background: var(--bg);
-                color: var(--fg);
-                padding: 0.75rem 1rem;
-                font: inherit;
-                font-size: 1rem;
-                outline: none;
-              }}
-              textarea:focus {{ box-shadow: var(--lift); }}
-              .bar {{
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 0.75rem;
-                padding: 0.5rem;
-              }}
-              .count {{ font-size: 0.875rem; color: var(--muted); font-variant-numeric: tabular-nums; }}
-              .btn {{
-                display: inline-flex;
-                height: 2.75rem;
-                align-items: center;
-                gap: 0.5rem;
-                border: 0;
-                border-radius: 999px;
-                background: var(--accent);
-                color: var(--bg);
-                padding: 0 1.25rem;
-                font: inherit;
-                font-size: 1rem;
-                font-weight: 500;
-                transition: transform 0.15s ease-out;
-              }}
-              .btn:active:not(:disabled) {{ transform: scale(0.96); }}
-              .btn:disabled {{ opacity: 0.5; }}
-              .btn-ghost {{
-                background: transparent;
-                color: var(--muted);
-                padding: 0 0.75rem;
-              }}
-              .btn-soft {{
-                background: var(--bg);
-                color: var(--fg);
-                box-shadow: var(--hair);
-                padding: 0 0.75rem;
-                font-size: 0.875rem;
-              }}
-              .status {{ margin-top: 1rem; font-size: 0.875rem; color: var(--accent); }}
-              .error {{ margin-top: 1rem; font-size: 0.875rem; color: var(--fg); }}
-              .section {{ margin-top: 2.5rem; }}
-              .section-head {{
-                display: flex;
-                align-items: flex-end;
-                justify-content: space-between;
-                gap: 0.75rem;
-              }}
-              h2 {{ font-size: 1.5rem; }}
-              .meta {{ margin-top: 0.25rem; font-size: 0.875rem; color: var(--muted); font-variant-numeric: tabular-nums; }}
-              .empty {{
-                margin-top: 1.5rem;
-                border-radius: 1.5rem;
-                background: var(--surface);
-                box-shadow: var(--hair);
-                padding: 2rem 1.25rem;
-                color: var(--muted);
-              }}
-              ol.list {{
-                list-style: none;
-                margin: 1rem 0 0;
-                padding: 0;
-              }}
-              .row {{
-                display: grid;
-                grid-template-columns: 3.25rem minmax(0, 1fr);
-                gap: 0.75rem;
-                padding: 1rem 0;
-                border-top: 1px solid rgba(244, 239, 230, 0.1);
-              }}
-              .num {{
-                padding-top: 0.125rem;
-                font-size: 0.875rem;
-                color: var(--accent);
-                font-variant-numeric: tabular-nums;
-              }}
-              .msg {{
-                font-size: 1rem;
-                white-space: pre-wrap;
-                word-break: break-word;
-              }}
-              .when {{
-                margin-top: 0.25rem;
-                font-size: 0.875rem;
-                color: var(--muted);
-                font-variant-numeric: tabular-nums;
-              }}
-              pre.sample {{
-                margin: 0.75rem 0 0;
-                overflow-x: auto;
-                border-radius: 1rem;
-                background: var(--bg);
-                padding: 1rem;
-                font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-                font-size: 0.875rem;
-                line-height: 1.5;
-              }}
-              .endpoint {{
-                margin-top: 1rem;
-                padding: 0 0.75rem;
-                font-size: 0.875rem;
-                color: var(--accent);
-                word-break: break-all;
-              }}
-              .foot {{
-                padding: 0.75rem;
-                font-size: 0.875rem;
-                color: var(--muted);
-              }}
-              .note {{
-                margin-top: 1rem;
-                padding: 0.75rem 1rem;
-                border-radius: 1rem;
-                background: rgba(226, 161, 90, 0.08);
-                color: var(--muted);
-                font-size: 0.875rem;
-              }}
-            </style>
-          </head>
-          <body>
-            <main class="wrap">
-              <header>
-                <p class="eyebrow">Append only</p>
-                <h1>Issue Drop</h1>
-                <p class="lead">Type anything. It is written, as raw text, into Vraigos/LogEndpoint. Nothing on this page can delete it.</p>
-                <p class="lock">🔒 Removal only happens in the GitHub account.</p>
-              </header>
+          css = """
+          :root{--bg:#141210;--surface:#221e19;--fg:#f4efe6;--muted:#a39888;--accent:#e2a15a;--hair:0 0 0 1px rgba(244,239,230,.08);--lift:0 0 0 1px rgba(226,161,90,.55);--font-display:"Fraunces",Georgia,serif;--font-sans:"Outfit",system-ui,sans-serif}
+          *{box-sizing:border-box}html{color-scheme:dark;-webkit-font-smoothing:antialiased}
+          body{margin:0;min-height:100dvh;background:var(--bg);color:var(--fg);font-family:var(--font-sans);line-height:1.5}
+          h1,h2{font-family:var(--font-display);font-weight:560;text-wrap:balance;margin:0}
+          p{margin:0;text-wrap:pretty}a{color:var(--fg)}button:not(:disabled){cursor:pointer}
+          ::selection{background:var(--accent);color:var(--bg)}
+          .wrap{margin:0 auto;max-width:32rem;padding:2rem 1.25rem 4rem}
+          @media(min-width:640px){.wrap{padding-top:3.5rem}}
+          .eyebrow{font-size:.75rem;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+          h1{margin-top:.75rem;font-size:2.5rem;line-height:1}
+          @media(min-width:640px){h1{font-size:3rem}}
+          .lead{margin-top:1rem;font-size:1rem;color:var(--muted)}
+          .lock{margin-top:.75rem;display:inline-flex;align-items:center;gap:.5rem;font-size:.875rem;color:var(--muted)}
+          .card{margin-top:2rem;border-radius:1.5rem;background:var(--surface);box-shadow:var(--hair);padding:.5rem}
+          label{display:block;padding:.75rem .75rem 0;font-size:.875rem;font-weight:500;color:var(--muted)}
+          textarea{margin-top:.5rem;width:100%;min-height:8rem;resize:vertical;border:0;border-radius:1rem;background:var(--bg);color:var(--fg);padding:.75rem 1rem;font:inherit;font-size:1rem;outline:none}
+          textarea:focus{box-shadow:var(--lift)}
+          .bar{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.5rem}
+          .count{font-size:.875rem;color:var(--muted);font-variant-numeric:tabular-nums}
+          .btn{display:inline-flex;height:2.75rem;align-items:center;gap:.5rem;border:0;border-radius:999px;background:var(--accent);color:var(--bg);padding:0 1.25rem;font:inherit;font-size:1rem;font-weight:500;transition:transform .15s ease-out}
+          .btn:active:not(:disabled){transform:scale(.96)}.btn:disabled{opacity:.5}
+          .btn-ghost{background:transparent;color:var(--muted);padding:0 .75rem}
+          .btn-soft{background:var(--bg);color:var(--fg);box-shadow:var(--hair);padding:0 .75rem;font-size:.875rem}
+          .status{margin-top:1rem;font-size:.875rem;color:var(--accent)}.error{margin-top:1rem;font-size:.875rem;color:var(--fg)}
+          .section{margin-top:2.5rem}
+          .section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:.75rem}
+          h2{font-size:1.5rem}.meta{margin-top:.25rem;font-size:.875rem;color:var(--muted);font-variant-numeric:tabular-nums}
+          .empty{margin-top:1.5rem;border-radius:1.5rem;background:var(--surface);box-shadow:var(--hair);padding:2rem 1.25rem;color:var(--muted)}
+          ol.list{list-style:none;margin:1rem 0 0;padding:0}
+          .row{display:grid;grid-template-columns:3.25rem minmax(0,1fr);gap:.75rem;padding:1rem 0;border-top:1px solid rgba(244,239,230,.1)}
+          .num{padding-top:.125rem;font-size:.875rem;color:var(--accent);font-variant-numeric:tabular-nums}
+          .msg{font-size:1rem;white-space:pre-wrap;word-break:break-word}
+          .when{margin-top:.25rem;font-size:.875rem;color:var(--muted);font-variant-numeric:tabular-nums}
+          pre.sample{margin:.75rem 0 0;overflow-x:auto;border-radius:1rem;background:var(--bg);padding:1rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.875rem;line-height:1.5}
+          .endpoint{margin-top:1rem;padding:0 .75rem;font-size:.875rem;color:var(--accent);word-break:break-all}
+          .foot{padding:.75rem;font-size:.875rem;color:var(--muted)}
+          .note{margin-top:1rem;padding:.75rem 1rem;border-radius:1rem;background:rgba(226,161,90,.08);color:var(--muted);font-size:.875rem}
+          """
 
-              <form id="seal-form" class="card" autocomplete="off">
-                <label for="message">Raw message</label>
-                <textarea id="message" name="text" rows="4" maxlength="2200" placeholder="hello"></textarea>
-                <div class="bar">
-                  <p class="count" id="char-count">0 / 2000</p>
-                  <button type="submit" class="btn" id="seal-btn">Seal it</button>
-                </div>
-              </form>
-              <p class="note" id="static-note">
-                This GitHub Pages build is static. <strong>Reading</strong> the log works here.
-                <strong>Sealing</strong> needs a server (e.g. Vercel) with <code>GITHUB_TOKEN</code>.
-                The form below will show a clear error if the API is not available.
-              </p>
-              <p class="status" id="notice" hidden></p>
-              <p class="error" id="fault" hidden></p>
-
-              <section class="section" aria-labelledby="log-heading">
-                <div class="section-head">
-                  <div>
-                    <h2 id="log-heading">Sealed lines</h2>
-                    <p class="meta" id="log-meta">{count} {"entry" if count == 1 else "entries"} · oldest stays</p>
-                  </div>
-                  <button type="button" class="btn btn-ghost" id="refresh-btn">Refresh</button>
-                </div>
-                <ol class="list" id="log-list">{list_block if items_html else ""}</ol>
-                <div id="log-empty-wrap">{" " if items_html else list_block}</div>
-              </section>
-
-              <section class="section card" aria-labelledby="endpoint-heading">
-                <div class="section-head" style="padding:0.75rem 0.75rem 0; align-items:flex-start;">
-                  <div>
-                    <h2 id="endpoint-heading">JSON for another app</h2>
-                    <p class="meta">POST {{"text":"hello"}}. GET reads the log. Delete is refused.</p>
-                  </div>
-                  <button type="button" class="btn btn-soft" id="copy-btn">Copy</button>
-                </div>
-                <p class="endpoint" id="endpoint-url"></p>
-                <pre class="sample">POST /api/json
-          Content-Type: application/json
-
-          {{"text":"hello"}}</pre>
-                <p class="foot">
-                  The file itself is public:
-                  <a href="https://github.com/Vraigos/LogEndpoint/blob/main/issus.json" target="_blank" rel="noreferrer">issus.json</a>
-                </p>
-              </section>
-            </main>
-            <script>
-          (function () {{
-            const MAX = 2000;
-            const RAW = "https://raw.githubusercontent.com/Vraigos/LogEndpoint/main/issus.json";
-            const FILE_HREF = "https://github.com/Vraigos/LogEndpoint/blob/main/issus.json";
-            const form = document.getElementById("seal-form");
-            const ta = document.getElementById("message");
-            const countEl = document.getElementById("char-count");
-            const notice = document.getElementById("notice");
-            const fault = document.getElementById("fault");
-            const list = document.getElementById("log-list");
-            const emptyWrap = document.getElementById("log-empty-wrap");
-            const meta = document.getElementById("log-meta");
-            const endpointUrl = document.getElementById("endpoint-url");
-            const base = location.pathname.replace(/\\/?(index\\.html)?$/, "") || "";
-            const apiPath = base + "/api/json";
-            endpointUrl.textContent = location.origin + (base || "") + "/api/json";
-
-            function setNotice(t) {{ notice.hidden = !t; notice.textContent = t || ""; }}
-            function setFault(t) {{ fault.hidden = !t; fault.textContent = t || ""; }}
-
-            function updateCount() {{
-              const n = ta.value.trim().length;
-              countEl.textContent = (n > MAX ? "Too long to seal." : n + " / " + MAX);
-            }}
-            ta.addEventListener("input", updateCount);
-            updateCount();
-
-            function formatWhen(at) {{
-              if (!at) return "";
-              const d = new Date(at);
-              if (Number.isNaN(d.getTime())) return "";
-              try {{
-                return new Intl.DateTimeFormat(undefined, {{
-                  day: "numeric", month: "short", year: "numeric",
-                  hour: "2-digit", minute: "2-digit"
-                }}).format(d);
-              }} catch {{ return at; }}
-            }}
-
-            function render(messages) {{
-              const cleaned = [];
-              for (const m of messages || []) {{
-                if (typeof m === "string" && m.trim()) cleaned.push({{ text: m, at: null }});
-                else if (m && typeof m.text === "string" && m.text.trim())
-                  cleaned.push({{ text: m.text, at: typeof m.at === "string" ? m.at : null }});
-              }}
-              meta.textContent = cleaned.length + (cleaned.length === 1 ? " entry" : " entries") + " · oldest stays";
-              if (!cleaned.length) {{
-                list.innerHTML = "";
-                emptyWrap.innerHTML = '<p class="empty">Nothing sealed yet. The first line stays until someone edits the file on GitHub.</p>';
-                return;
-              }}
-              emptyWrap.innerHTML = "";
-              const newestFirst = cleaned.map((m, i) => ({{ ...m, n: i + 1 }})).reverse();
-              list.innerHTML = newestFirst.map((m) => {{
-                const when = formatWhen(m.at);
-                return '<li class="row"><span class="num">#' + String(m.n).padStart(3,"0") +
-                  '</span><div class="body"><p class="msg"></p>' +
-                  (when ? '<p class="when">' + when + "</p>" : "") + "</div></li>";
-              }}).join("");
-              [...list.querySelectorAll(".msg")].forEach((el, i) => {{
-                el.textContent = newestFirst[i].text;
-              }});
-            }}
-
-            async function loadLog() {{
+          js = r"""
+          (function(){
+            const MAX=2000;
+            const RAW="https://raw.githubusercontent.com/Vraigos/LogEndpoint/main/issus.json";
+            const form=document.getElementById("seal-form");
+            const ta=document.getElementById("message");
+            const countEl=document.getElementById("char-count");
+            const notice=document.getElementById("notice");
+            const fault=document.getElementById("fault");
+            const list=document.getElementById("log-list");
+            const emptyWrap=document.getElementById("log-empty-wrap");
+            const meta=document.getElementById("log-meta");
+            const endpointUrl=document.getElementById("endpoint-url");
+            const base=location.pathname.replace(/\/?(index\.html)?$/,"")||"";
+            endpointUrl.textContent=location.origin+(base||"")+"/api/json";
+            function setNotice(t){notice.hidden=!t;notice.textContent=t||"";}
+            function setFault(t){fault.hidden=!t;fault.textContent=t||"";}
+            function updateCount(){const n=ta.value.trim().length;countEl.textContent=n>MAX?"Too long to seal.":n+" / "+MAX;}
+            ta.addEventListener("input",updateCount);updateCount();
+            function formatWhen(at){if(!at)return"";const d=new Date(at);if(Number.isNaN(d.getTime()))return"";try{return new Intl.DateTimeFormat(undefined,{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}).format(d);}catch(e){return at;}}
+            function render(messages){
+              const cleaned=[];
+              for(const m of messages||[]){
+                if(typeof m==="string"&&m.trim())cleaned.push({text:m,at:null});
+                else if(m&&typeof m.text==="string"&&m.text.trim())cleaned.push({text:m.text,at:typeof m.at==="string"?m.at:null});
+              }
+              meta.textContent=cleaned.length+(cleaned.length===1?" entry":" entries")+" · oldest stays";
+              if(!cleaned.length){list.innerHTML="";emptyWrap.innerHTML='<p class="empty">Nothing sealed yet. The first line stays until someone edits the file on GitHub.</p>';return;}
+              emptyWrap.innerHTML="";
+              const newestFirst=cleaned.map((m,i)=>({...m,n:i+1})).reverse();
+              list.innerHTML=newestFirst.map(m=>{
+                const when=formatWhen(m.at);
+                return '<li class="row"><span class="num">#'+String(m.n).padStart(3,"0")+'</span><div class="body"><p class="msg"></p>'+(when?'<p class="when">'+when+"</p>":"")+"</div></li>";
+              }).join("");
+              [...list.querySelectorAll(".msg")].forEach((el,i)=>{el.textContent=newestFirst[i].text;});
+            }
+            async function loadLog(){
               setFault(null);
-              const urls = [RAW + "?t=" + Date.now(), "issus.json?t=" + Date.now()];
-              let lastErr = null;
-              for (const url of urls) {{
-                try {{
-                  const res = await fetch(url, {{ cache: "no-store" }});
-                  if (!res.ok) throw new Error("HTTP " + res.status);
-                  const data = await res.json();
-                  const messages = Array.isArray(data) ? data : (data && data.messages) || [];
-                  render(messages);
-                  return;
-                }} catch (e) {{
-                  lastErr = e;
-                }}
-              }}
-              setFault("Could not load the log. " + (lastErr && lastErr.message ? lastErr.message : ""));
-            }}
-
-            document.getElementById("refresh-btn").addEventListener("click", () => {{ loadLog(); }});
-
-            form.addEventListener("submit", async (e) => {{
+              const urls=[RAW+"?t="+Date.now(),"issus.json?t="+Date.now()];
+              let lastErr=null;
+              for(const url of urls){
+                try{
+                  const res=await fetch(url,{cache:"no-store"});
+                  if(!res.ok)throw new Error("HTTP "+res.status);
+                  const data=await res.json();
+                  const messages=Array.isArray(data)?data:(data&&data.messages)||[];
+                  render(messages);return;
+                }catch(e){lastErr=e;}
+              }
+              setFault("Could not load the log. "+(lastErr&&lastErr.message?lastErr.message:""));
+            }
+            document.getElementById("refresh-btn").addEventListener("click",()=>{loadLog();});
+            form.addEventListener("submit",async(e)=>{
               e.preventDefault();
-              const text = ta.value.trim();
-              if (!text || text.length > MAX) return;
-              setNotice(null);
-              setFault(null);
-              const btn = document.getElementById("seal-btn");
-              btn.disabled = true;
-              btn.textContent = "Sealing…";
-              try {{
-                const res = await fetch(apiPath, {{
-                  method: "POST",
-                  headers: {{ "Content-Type": "application/json" }},
-                  body: JSON.stringify({{ text }}),
-                }});
-                const data = await res.json().catch(() => null);
-                if (!res.ok || !data || !data.ok) {{
-                  throw new Error((data && data.error) || ("HTTP " + res.status + " — sealing needs a server deploy with GITHUB_TOKEN (e.g. Vercel). This Pages site is read-only."));
-                }}
-                ta.value = "";
-                updateCount();
+              const text=ta.value.trim();
+              if(!text||text.length>MAX)return;
+              setNotice(null);setFault(null);
+              const btn=document.getElementById("seal-btn");
+              btn.disabled=true;btn.textContent="Sealing…";
+              try{
+                const res=await fetch((base||"")+"/api/json",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});
+                const data=await res.json().catch(()=>null);
+                if(!res.ok||!data||!data.ok)throw new Error((data&&data.error)||("HTTP "+res.status+" — sealing needs a server deploy with GITHUB_TOKEN (e.g. Vercel). This Pages site is read-only."));
+                ta.value="";updateCount();
                 setNotice("Sealed. It is in the GitHub file now, and this app cannot take it back.");
                 await loadLog();
-              }} catch (err) {{
-                setFault(err && err.message ? err.message : "Could not seal that message.");
-              }} finally {{
-                btn.disabled = false;
-                btn.textContent = "Seal it";
-              }}
-            }});
-
-            document.getElementById("copy-btn").addEventListener("click", async () => {{
-              const sample = "POST " + endpointUrl.textContent + "\\nContent-Type: application/json\\n\\n{{\\"text\\":\\"hello\\"}}";
-              try {{
-                await navigator.clipboard.writeText(sample);
-                const b = document.getElementById("copy-btn");
-                b.textContent = "Copied";
-                setTimeout(() => {{ b.textContent = "Copy"; }}, 1600);
-              }} catch {{
-                setFault("Could not copy. Select the sample instead.");
-              }}
-            }});
-
+              }catch(err){setFault(err&&err.message?err.message:"Could not seal that message.");}
+              finally{btn.disabled=false;btn.textContent="Seal it";}
+            });
+            document.getElementById("copy-btn").addEventListener("click",async()=>{
+              const sample="POST "+endpointUrl.textContent+"\nContent-Type: application/json\n\n{\"text\":\"hello\"}";
+              try{await navigator.clipboard.writeText(sample);const b=document.getElementById("copy-btn");b.textContent="Copied";setTimeout(()=>{b.textContent="Copy";},1600);}
+              catch(e){setFault("Could not copy. Select the sample instead.");}
+            });
             loadLog();
-          }})();
-            </script>
+          })();
+          """
+
+          page = """<!DOCTYPE html>
+          <html lang="en">
+          <head>
+          <meta charset="UTF-8"/>
+          <meta name="viewport" content="width=device-width, initial-scale=1"/>
+          <meta name="theme-color" content="#141210"/>
+          <title>Issue Drop</title>
+          <link rel="icon" type="image/svg+xml" href="favicon.svg"/>
+          <link rel="preconnect" href="https://fonts.googleapis.com"/>
+          <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+          <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,520;9..144,640&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet"/>
+          <style>
+          """ + css + """
+          </style>
+          </head>
+          <body>
+          <main class="wrap">
+          <header>
+          <p class="eyebrow">Append only</p>
+          <h1>Issue Drop</h1>
+          <p class="lead">Type anything. It is written, as raw text, into Vraigos/LogEndpoint. Nothing on this page can delete it.</p>
+          <p class="lock">Removal only happens in the GitHub account.</p>
+          </header>
+          <form id="seal-form" class="card" autocomplete="off">
+          <label for="message">Raw message</label>
+          <textarea id="message" name="text" rows="4" maxlength="2200" placeholder="hello"></textarea>
+          <div class="bar">
+          <p class="count" id="char-count">0 / 2000</p>
+          <button type="submit" class="btn" id="seal-btn">Seal it</button>
+          </div>
+          </form>
+          <p class="note">This GitHub Pages build is static. <strong>Reading</strong> the log works here. <strong>Sealing</strong> needs a server (e.g. Vercel) with <code>GITHUB_TOKEN</code>.</p>
+          <p class="status" id="notice" hidden></p>
+          <p class="error" id="fault" hidden></p>
+          <section class="section" aria-labelledby="log-heading">
+          <div class="section-head">
+          <div>
+          <h2 id="log-heading">Sealed lines</h2>
+          <p class="meta" id="log-meta">""" + str(count) + (" entry" if count == 1 else " entries") + """ · oldest stays</p>
+          </div>
+          <button type="button" class="btn btn-ghost" id="refresh-btn">Refresh</button>
+          </div>
+          <ol class="list" id="log-list">
+          """ + list_block + """
+          </ol>
+          <div id="log-empty-wrap">""" + empty_block + """</div>
+          </section>
+          <section class="section card" aria-labelledby="endpoint-heading">
+          <div class="section-head" style="padding:.75rem .75rem 0;align-items:flex-start">
+          <div>
+          <h2 id="endpoint-heading">JSON for another app</h2>
+          <p class="meta">POST {"text":"hello"}. GET reads the log. Delete is refused.</p>
+          </div>
+          <button type="button" class="btn btn-soft" id="copy-btn">Copy</button>
+          </div>
+          <p class="endpoint" id="endpoint-url"></p>
+          <pre class="sample">POST /api/json
+          Content-Type: application/json
+
+          {"text":"hello"}</pre>
+          <p class="foot">The file itself is public: <a href="https://github.com/Vraigos/LogEndpoint/blob/main/issus.json" target="_blank" rel="noreferrer">issus.json</a></p>
+          </section>
+          </main>
+          <script>
+          """ + js + """
+          </script>
           </body>
           </html>
           """
-          # dedent-ish: strip common leading spaces from template lines
-          lines = page.splitlines()
-          # find min indent of non-empty lines
-          indents = [len(l) - len(l.lstrip(" ")) for l in lines if l.strip()]
-          m = min(indents) if indents else 0
-          cleaned = "\\n".join(l[m:] if len(l) >= m else l for l in lines)
-          (root / "index.html").write_text(cleaned + "\\n", encoding="utf-8")
-          (root / "404.html").write_text(cleaned + "\\n", encoding="utf-8")
+          (root / "index.html").write_text(page, encoding="utf-8")
+          (root / "404.html").write_text(page, encoding="utf-8")
           print("Wrote index.html + 404.html, messages:", count)
           ENDPY
 
           ls -la site
-          head -5 site/index.html
+          wc -l site/index.html
+          head -c 200 site/index.html; echo
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
