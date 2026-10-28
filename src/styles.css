@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-sans: "Outfit", system-ui, sans-serif;
+
+  --color-bg: #141210;
+  --color-surface: #221e19;
+  --color-fg: #f4efe6;
+  --color-muted: #a39888;
+  --color-accent: #e2a15a;
+
+  --shadow-hairline: 0 0 0 1px rgba(244, 239, 230, 0.08);
+  --shadow-lift: 0 0 0 1px rgba(226, 161, 90, 0.55);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  h1,
+  h2 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+    font-weight: 560;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-bg);
+  }
+}
+
+@utility shadow-hairline {
+  box-shadow: var(--shadow-hairline);
+}
+
+@utility shadow-lift {
+  box-shadow: var(--shadow-lift);
+}
